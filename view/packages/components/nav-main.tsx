@@ -22,9 +22,13 @@ export function NavMain({ items, onItemClick }: TopNavMainProps) {
   const router = useRouter();
   const pathname = usePathname();
   const { isItemCollapsed, toggleItem } = useCollapsibleState();
-  const { state } = useSidebar();
+  const { state, isMobile, setOpenMobile } = useSidebar();
 
   const handleClick = (url: string) => {
+    // Close sidebar on mobile after navigation
+    if (isMobile) {
+      setOpenMobile(false);
+    }
     onItemClick?.(url);
     router.push(url);
   };
@@ -95,7 +99,15 @@ export function NavMain({ items, onItemClick }: TopNavMainProps) {
                         return (
                           <SidebarMenuSubItem key={subItem.title}>
                             <SidebarMenuSubButton asChild isActive={subItemIsActive}>
-                              <Link href={subItem.url}>
+                              <Link
+                                href={subItem.url}
+                                onClick={() => {
+                                  // Close sidebar on mobile after navigation
+                                  if (isMobile) {
+                                    setOpenMobile(false);
+                                  }
+                                }}
+                              >
                                 <span>{subItem.title}</span>
                               </Link>
                             </SidebarMenuSubButton>
