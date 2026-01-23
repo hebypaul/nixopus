@@ -35,6 +35,16 @@ export function NavMain({ items, onItemClick }: TopNavMainProps) {
   const { state, isMobile, setOpenMobile } = useSidebar();
 
   /**
+   * Closes the mobile sidebar if the current device is mobile.
+   * This helper function reduces code duplication for sidebar close logic.
+   */
+  const closeMobileSidebar = () => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+  };
+
+  /**
    * Handles click events on navigation menu items.
    * Closes the mobile sidebar if on a mobile device, triggers the optional
    * onItemClick callback, and navigates to the specified URL.
@@ -42,10 +52,7 @@ export function NavMain({ items, onItemClick }: TopNavMainProps) {
    * @param url - The URL to navigate to when the item is clicked
    */
   const handleClick = (url: string) => {
-    // Close sidebar on mobile after navigation
-    if (isMobile) {
-      setOpenMobile(false);
-    }
+    closeMobileSidebar();
     onItemClick?.(url);
     router.push(url);
   };
@@ -127,11 +134,7 @@ export function NavMain({ items, onItemClick }: TopNavMainProps) {
                               <Link
                                 href={subItem.url}
                                 onClick={() => {
-                                  // Close sidebar on mobile after navigation
-                                  if (isMobile) {
-                                    setOpenMobile(false);
-                                  }
-                                  // Update active navigation state for consistency with top-level items
+                                  closeMobileSidebar();
                                   onItemClick?.(subItem.url);
                                 }}
                               >
