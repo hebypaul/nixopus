@@ -131,6 +131,8 @@ export function NavMain({ items, onItemClick }: TopNavMainProps) {
                                   if (isMobile) {
                                     setOpenMobile(false);
                                   }
+                                  // Update active navigation state for consistency with top-level items
+                                  onItemClick?.(subItem.url);
                                 }}
                               >
                                 <span>{subItem.title}</span>
