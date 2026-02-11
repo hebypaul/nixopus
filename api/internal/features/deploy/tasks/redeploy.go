@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	"github.com/raghavyuva/caddygo"
-	"github.com/raghavyuva/nixopus-api/internal/config"
 	shared_types "github.com/raghavyuva/nixopus-api/internal/types"
 )
 
@@ -16,7 +15,7 @@ func (s *TaskService) HandleReDeploy(ctx context.Context, TaskPayload shared_typ
 
 	taskCtx.LogAndUpdateStatus("Starting redeploy process", shared_types.Cloning)
 
-	repoPath, err := s.Clone(CloneConfig{
+	repoPath, err := s.Clone(ctx, CloneConfig{
 		TaskPayload:    TaskPayload,
 		DeploymentType: string(shared_types.DeploymentTypeReDeploy),
 		TaskContext:    taskCtx,
@@ -27,6 +26,10 @@ func (s *TaskService) HandleReDeploy(ctx context.Context, TaskPayload shared_typ
 	}
 
 	taskCtx.LogAndUpdateStatus("Repository cloned successfully", shared_types.Building)
+	
+	// Add organization ID to context for docker service
+	orgCtx := context.WithValue(ctx, shared_types.OrganizationIDKey, TaskPayload.Application.OrganizationID.String())
+	
 	taskCtx.AddLog("Building image from Dockerfile " + repoPath + " for application " + TaskPayload.Application.Name)
 
 	buildImageResult, err := s.BuildImage(BuildConfig{
@@ -35,6 +38,7 @@ func (s *TaskService) HandleReDeploy(ctx context.Context, TaskPayload shared_typ
 		Force:             TaskPayload.UpdateOptions.Force,
 		ForceWithoutCache: TaskPayload.UpdateOptions.ForceWithoutCache,
 		TaskContext:       taskCtx,
+		Context:           orgCtx,
 	})
 	if err != nil {
 		taskCtx.LogAndUpdateStatus("Failed to build image: "+err.Error(), shared_types.Failed)
@@ -44,7 +48,7 @@ func (s *TaskService) HandleReDeploy(ctx context.Context, TaskPayload shared_typ
 	taskCtx.AddLog("Image built successfully: " + buildImageResult + " for application " + TaskPayload.Application.Name)
 	taskCtx.UpdateStatus(shared_types.Deploying)
 
-	containerResult, err := s.AtomicUpdateContainer(TaskPayload, taskCtx)
+	containerResult, err := s.AtomicUpdateContainer(ctx, TaskPayload, taskCtx)
 	if err != nil {
 		taskCtx.LogAndUpdateStatus("Failed to update container: "+err.Error(), shared_types.Failed)
 		return err
@@ -61,7 +65,13 @@ func (s *TaskService) HandleReDeploy(ctx context.Context, TaskPayload shared_typ
 			taskCtx.LogAndUpdateStatus("Failed to convert port to int: "+err.Error(), shared_types.Failed)
 			return err
 		}
-		upstreamHost := config.AppConfig.SSH.Host
+
+		// Get SSH host from organization-specific SSH manager
+		upstreamHost, err := GetSSHHostForOrganization(ctx, TaskPayload.Application.OrganizationID)
+		if err != nil {
+			taskCtx.LogAndUpdateStatus("Failed to get SSH host: "+err.Error(), shared_types.Failed)
+			return err
+		}
 
 		// Loop through all domains and add them with TLS
 		for _, appDomain := range TaskPayload.Application.Domains {

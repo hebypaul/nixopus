@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/raghavyuva/nixopus-api/internal/features/deploy/docker"
 	"github.com/raghavyuva/nixopus-api/internal/features/logger"
 	sshpkg "github.com/raghavyuva/nixopus-api/internal/features/ssh"
+	shared_types "github.com/raghavyuva/nixopus-api/internal/types"
 )
 
-func getDockerService() (*docker.DockerService, error) {
-	service, err := docker.GetDockerManager().GetDefaultService()
+func getDockerService(ctx context.Context) (docker.DockerRepository, error) {
+	service, err := docker.GetDockerServiceFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -23,10 +25,22 @@ func getDockerService() (*docker.DockerService, error) {
 }
 
 func NewDashboardMonitor(conn *websocket.Conn, log logger.Logger, organizationID string, deployService DeployServiceProvider) (*DashboardMonitor, error) {
-	ssh_client := sshpkg.NewSSH()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	dockerService, err := getDockerService()
+	// Get organization-specific SSH client
+	orgID, err := uuid.Parse(organizationID)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("invalid organization ID: %w", err)
+	}
+	orgCtx := context.WithValue(ctx, shared_types.OrganizationIDKey, orgID.String())
+	manager, err := sshpkg.GetSSHManagerFromContext(orgCtx)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to get SSH manager: %w", err)
+	}
+
+	dockerService, err := getDockerService(orgCtx)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to get docker service: %w", err)
@@ -34,7 +48,7 @@ func NewDashboardMonitor(conn *websocket.Conn, log logger.Logger, organizationID
 
 	monitor := &DashboardMonitor{
 		conn:           conn,
-		sshpkg:         ssh_client,
+		sshManager:     manager,
 		log:            log,
 		ctx:            ctx,
 		cancel:         cancel,
@@ -52,14 +66,7 @@ func (m *DashboardMonitor) Start() {
 	go func() {
 		ticker := time.NewTicker(m.Interval)
 		defer ticker.Stop()
-		client, err := m.sshpkg.Connect()
-		if err != nil {
-			m.log.Log(logger.Error, "Failed to connect to SSH server", err.Error())
-			m.BroadcastError(err.Error(), "ssh_connect")
-			return
-		}
-		m.client = client
-		defer client.Close()
+
 		m.HandleAllOperations()
 
 		for {
@@ -83,6 +90,22 @@ func (m *DashboardMonitor) Stop() {
 }
 
 func (m *DashboardMonitor) HandleAllOperations() {
+	// Check if operations are already running - skip if so to prevent concurrent execution
+	m.operationsMutex.Lock()
+	if m.operationsRunning {
+		m.operationsMutex.Unlock()
+		return
+	}
+	m.operationsRunning = true
+	m.operationsMutex.Unlock()
+
+	// Ensure we reset the flag when done
+	defer func() {
+		m.operationsMutex.Lock()
+		m.operationsRunning = false
+		m.operationsMutex.Unlock()
+	}()
+
 	for _, operation := range m.Operations {
 		select {
 		case <-m.ctx.Done():
@@ -125,11 +148,6 @@ func (m *DashboardMonitor) SetOperations(operations []DashboardOperation) {
 }
 
 func (m *DashboardMonitor) Close() {
-	if m.client != nil {
-		m.client.Close()
-		m.client = nil
-	}
-
 	if m.conn != nil {
 		m.connMutex.Lock()
 		_ = m.conn.WriteMessage(
